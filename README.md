@@ -23,16 +23,29 @@ Measured on that stack, with everything above co-resident:
 Cross-checked against SGLang's own `gen throughput` counter (139.55 tok/s at
 c=8) at the same instant.
 
+**Those numbers are with the whole stack resident.** We measured the brain solo
+on the same box and it was not faster — 140.04 vs 140.42 at c=8, and *slower* at
+c=1. Decode is memory-bandwidth-bound and idle models do not consume bandwidth,
+so running ASR and TTS alongside is close to free.
+[`docs/CO-RESIDENCY.md`](docs/CO-RESIDENCY.md) has the full A/B.
+
+⚠️ **One number for "tok/s" on a speculative server is close to meaningless.**
+The 18.99 above is a *long-generation* prompt. The same model and hardware with a
+drafter tuned for short answers is reported around 3x that, and both figures are
+honest — they measure different workloads. Read
+[`docs/CHOOSING-A-DRAFTER.md`](docs/CHOOSING-A-DRAFTER.md) before comparing
+anyone's throughput to anyone else's, including ours.
+
 **There is no separate vision model.** The 27B is a native VLM and SGLang serves
 the vision tower in-process, which is what makes the budget work — we removed a
 dedicated 4B vision model and got 14 GB back for free.
 
 ---
 
-## The two things this repo is actually for
+## The three things this repo is actually for
 
-Getting the stack up is the easy part. These are the two mistakes that cost us
-most of a night, and both are silent.
+Getting the stack up is the easy part. These are the three mistakes that cost us
+most of a night. All three are silent — nothing errors, nothing warns.
 
 ### 1. Your speculative drafter must match the target's quantisation
 
@@ -58,7 +71,32 @@ Expect ~3–4 for this model class. Under ~2.5 means something is wrong.
 Full detail, including how drafters get republished in place under the same
 name, in **[`docs/DRAFTER.md`](docs/DRAFTER.md)**.
 
-### 2. Count tokens, not stream chunks
+### 2. Benchmark the workload you actually run
+
+We measured one prompt shape — a 256-token "explain this thoroughly" — and
+concluded the model was slow at 18.99 tok/s. A published probe table for this
+model class then showed our drafter's *long-essay* figure as **18.3**, against
+**66.6** for a different drafter on *short chat*. We had benchmarked our drafter
+in the one regime it is worst at.
+
+| probe | EAGLE/MTP | DSpark | DFlash2 |
+|---|---:|---:|---:|
+| code | 34.5 | **51.5** | 50.9 |
+| long essay | 24.1 | **18.3** | 25.4 |
+| short chat | 21.0 | 23.2 | **66.6** |
+
+Before choosing a drafter, find out what concurrency and turn shape you actually
+serve. [`scripts/track-concurrency.py`](scripts/track-concurrency.py) reads it
+out of SGLang's own decode-batch logs:
+
+```bash
+python3 scripts/track-concurrency.py --container qwen38-27b --out results/concurrency.json
+```
+
+If your traffic is overwhelmingly single-stream, optimising aggregate throughput
+is optimising something you never do.
+
+### 3. Count tokens, not stream chunks
 
 With speculative decoding a server emits **several accepted tokens in one SSE
 chunk**. A benchmark that counts chunks divides your throughput by the
@@ -97,6 +135,9 @@ scripts/smoke-test.sh
 python3 scripts/vision-test.py --base-url http://localhost:8001/v1 --model qwen3.8-27b
 python3 scripts/bench.py --base-url http://localhost:8001/v1 --model qwen3.8-27b \
     --concurrency 1,4,8 --out results/mine.json
+
+# What concurrency do you ACTUALLY serve? Run this for a day before tuning.
+python3 scripts/track-concurrency.py --container qwen38-27b --out results/concurrency.json
 ```
 
 **Requirements:** GB10 (sm_121), 128 GB unified memory, aarch64, Docker with the
@@ -115,6 +156,8 @@ NVIDIA runtime, ~50 GB free disk.
 | **static pool is of TOTAL memory** | second model OOMs | it is not a fraction of what is *free*, and it is reserved at boot. Start the 27B **first** |
 | **FP8 KV regression** | `19 × 23` returns 417 | this checkpoint declares `kv_cache_quant_algo: FP8`. The canary catches it |
 | **stale drafter** | quietly worse than upstream | drafters get republished in place under the same name. Diff `config.json`, not the `.py` files |
+| **benchmarking one prompt shape** | a number that misleads by 3× | speculative gain is workload-dependent. [`docs/CHOOSING-A-DRAFTER.md`](docs/CHOOSING-A-DRAFTER.md) |
+| **giving the model the whole box** | no faster, sometimes slower | a KV pool larger than `--max-running-requests` can use is wasted. [`docs/CO-RESIDENCY.md`](docs/CO-RESIDENCY.md) |
 
 ---
 
