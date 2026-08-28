@@ -1,0 +1,18 @@
+qwen38-27b-spark-stack
+Copyright 2026 Karti Tripathi
+
+Model weights are NOT part of this repository.
+
+  Qwen3.8-27B is released by Alibaba under Apache-2.0.
+  The NVFP4 conversion and the DSpark speculative drafter are published by
+  RadixArk (https://huggingface.co/RadixArk), the SGLang team.
+
+Serving stack: SGLang (https://github.com/sgl-project/sglang).
+Speculative drafters trained with SpecForge (https://github.com/sgl-project/SpecForge).
+DSpark extends DFlash (https://github.com/z-lab/dflash).
+
+Some measurement scripts are shared with our sibling repository
+https://github.com/karti-ai/qwen38-flash-next-spark and carry the same licence.
+
+Serving-parameter starting points were informed by published GB10 recipes from
+MiaAI-Lab (https://github.com/MiaAI-Lab) and by RadixArk's own model cards.
