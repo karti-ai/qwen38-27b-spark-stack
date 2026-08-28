@@ -20,21 +20,60 @@ import sys
 import time
 from collections import Counter
 
-RUNNING = re.compile(r"#running-req:\s*(\d+)")
+# Count DECODE batches only. A "Prefill batch" line reports #running-req as the
+# number of OTHER requests already running, so a solo request logs 0 there —
+# lumping prefill in inflates the zero bucket and hides the real distribution.
+# We hit exactly that: 90% "concurrency 0" that was really solo prefills.
+DECODE = re.compile(r"Decode batch.*#running-req:\s*(\d+)")
+PREFILL = re.compile(r"Prefill batch.*#running-req:\s*(\d+)")
 ACCEPT = re.compile(r"accept len:\s*([0-9.]+)")
 GENTP = re.compile(r"gen throughput \(token/s\):\s*([0-9.]+)")
 
 
 def load(path: str) -> dict:
+    """Resume from a previous run.
+
+    NOTE the saved file is a *report*, not the internal state: it stores
+    `mean_accept_len`, not the running sum and count that produced it. So we
+    rebuild what we can and default the rest, rather than assuming the keys we
+    write are the keys we read. Getting that wrong crash-looped this service.
+    """
+    st = {
+        "running_hist": Counter(),
+        "decode_batches": 0,
+        "prefill_batches": 0,
+        "accept_len_sum": 0.0,
+        "accept_n": 0,
+        "gen_tp_sum": 0.0,
+        "gen_tp_n": 0,
+        "started": time.time(),
+    }
     try:
         with open(path) as fh:
             d = json.load(fh)
-        d["running_hist"] = Counter({int(k): v for k, v in d.get("running_hist", {}).items()})
-        return d
-    except Exception:  # noqa: BLE001 — a fresh or corrupt file just starts over
-        return {"running_hist": Counter(), "decode_batches": 0,
-                "accept_len_sum": 0.0, "accept_n": 0,
-                "gen_tp_sum": 0.0, "gen_tp_n": 0, "started": time.time()}
+    except Exception:  # noqa: BLE001 — missing or corrupt file just starts fresh
+        return st
+
+    hist = d.get("running_hist") or {}
+    try:
+        st["running_hist"] = Counter({int(k): int(v) for k, v in hist.items()})
+    except (TypeError, ValueError):
+        st["running_hist"] = Counter()
+    st["decode_batches"] = int(d.get("decode_batches") or 0)
+    st["prefill_batches"] = int(d.get("prefill_batches") or 0)
+    st["started"] = d.get("started") or st["started"]
+
+    # Re-seed the running means from the reported average so resuming does not
+    # throw away history: one pseudo-sample weighted by the batches behind it.
+    mal = d.get("mean_accept_len")
+    if mal and st["decode_batches"]:
+        st["accept_len_sum"] = float(mal) * st["decode_batches"]
+        st["accept_n"] = st["decode_batches"]
+    mgt = d.get("mean_gen_tok_s")
+    if mgt and st["decode_batches"]:
+        st["gen_tp_sum"] = float(mgt) * st["decode_batches"]
+        st["gen_tp_n"] = st["decode_batches"]
+    return st
 
 
 def save(path: str, st: dict) -> None:
@@ -44,6 +83,7 @@ def save(path: str, st: dict) -> None:
         "started": st["started"],
         "updated": time.time(),
         "decode_batches": st["decode_batches"],
+        "prefill_batches": st.get("prefill_batches", 0),
         "running_hist": {str(k): v for k, v in sorted(hist.items())},
         "running_pct": (
             {str(k): round(100.0 * v / total, 2) for k, v in sorted(hist.items())}
@@ -81,10 +121,12 @@ def main() -> int:
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         try:
             for line in p.stdout:  # type: ignore[union-attr]
-                m = RUNNING.search(line)
+                m = DECODE.search(line)
                 if m:
                     st["running_hist"][int(m.group(1))] += 1
                     st["decode_batches"] += 1
+                elif PREFILL.search(line):
+                    st["prefill_batches"] = st.get("prefill_batches", 0) + 1
                 a = ACCEPT.search(line)
                 if a:
                     st["accept_len_sum"] += float(a.group(1)); st["accept_n"] += 1
