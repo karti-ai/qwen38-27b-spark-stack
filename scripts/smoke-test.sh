@@ -65,7 +65,7 @@ acc="$(docker logs --tail 200 "$CONTAINER" 2>&1 | tr '\r' '\n' \
 if [ -z "$acc" ]; then
   echo "   (no decode batches logged yet, or container name '$CONTAINER' is wrong)"
 else
-  echo "$acc" | sed 's/^/   /'
+  while IFS= read -r line; do printf '   %s\n' "$line"; done <<< "$acc"
   len="$(printf '%s' "$acc" | tail -1 | grep -oE 'accept len: [0-9.]+' | grep -oE '[0-9.]+')"
   if [ -n "$len" ] && awk "BEGIN{exit !($len < 2.5)}"; then
     echo "   ⚠️  accept length ${len} is LOW for this model class (expect ~3-4)."
