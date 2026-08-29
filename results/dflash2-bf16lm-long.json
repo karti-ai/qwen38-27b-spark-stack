@@ -1,0 +1,32 @@
+{
+  "base_url": "http://localhost:8001/v1",
+  "model": "brain-qwen38-dflash-bf16lm",
+  "profile": "long",
+  "max_tokens": 256,
+  "results": [
+    {
+      "concurrency": 1,
+      "streams_ok": 1,
+      "errors": [],
+      "wall_seconds": 10.41,
+      "total_tokens": 256,
+      "aggregate_tok_s": 24.6,
+      "per_stream_tok_s": 24.6,
+      "ttft_p50": 0.31,
+      "tokens_per_chunk": 3.28,
+      "queue_time_delta_s": null
+    },
+    {
+      "concurrency": 4,
+      "streams_ok": 4,
+      "errors": [],
+      "wall_seconds": 13.16,
+      "total_tokens": 1024,
+      "aggregate_tok_s": 77.84,
+      "per_stream_tok_s": 20.78,
+      "ttft_p50": 0.279,
+      "tokens_per_chunk": 3.32,
+      "queue_time_delta_s": null
+    }
+  ]
+}

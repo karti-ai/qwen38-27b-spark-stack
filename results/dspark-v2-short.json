@@ -1,0 +1,32 @@
+{
+  "base_url": "http://localhost:8001/v1",
+  "model": "brain-qwen38-dspark",
+  "profile": "short",
+  "max_tokens": 48,
+  "results": [
+    {
+      "concurrency": 1,
+      "streams_ok": 1,
+      "errors": [],
+      "wall_seconds": 0.24,
+      "total_tokens": 2,
+      "aggregate_tok_s": 8.32,
+      "per_stream_tok_s": 8.34,
+      "ttft_p50": 0.128,
+      "tokens_per_chunk": 2.0,
+      "queue_time_delta_s": null
+    },
+    {
+      "concurrency": 4,
+      "streams_ok": 4,
+      "errors": [],
+      "wall_seconds": 1.88,
+      "total_tokens": 56,
+      "aggregate_tok_s": 29.81,
+      "per_stream_tok_s": 11.32,
+      "ttft_p50": 0.377,
+      "tokens_per_chunk": 2.95,
+      "queue_time_delta_s": null
+    }
+  ]
+}

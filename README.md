@@ -79,11 +79,19 @@ model class then showed our drafter's *long-essay* figure as **18.3**, against
 **66.6** for a different drafter on *short chat*. We had benchmarked our drafter
 in the one regime it is worst at.
 
-| probe | EAGLE/MTP | DSpark | DFlash2 |
-|---|---:|---:|---:|
-| code | 34.5 | **51.5** | 50.9 |
-| long essay | 24.1 | **18.3** | 25.4 |
-| short chat | 21.0 | 23.2 | **66.6** |
+We then measured both drafters ourselves, and they split cleanly by workload:
+
+| config | short c=1 | long c=1 |
+|---|---:|---:|
+| DSpark v2 | **8.32** | 14.61 |
+| DFlash2 | 3.96 | **30.65** |
+
+**DSpark wins short turns by 2.1×; DFlash2 wins long generations by 2.1×.**
+That is the *opposite* of the published probe table we had been carrying, which
+was measured against an older drafter version — a drafter comparison does not
+survive a drafter upgrade. Full matrix, plus an optimisation that worked
+mechanically and made throughput *worse*, in
+[`docs/DRAFTER-AB.md`](docs/DRAFTER-AB.md).
 
 Before choosing a drafter, find out what concurrency and turn shape you actually
 serve. [`scripts/track-concurrency.py`](scripts/track-concurrency.py) reads it
@@ -158,6 +166,7 @@ NVIDIA runtime, ~50 GB free disk.
 | **stale drafter** | quietly worse than upstream | drafters get republished in place under the same name. Diff `config.json`, not the `.py` files |
 | **benchmarking one prompt shape** | a number that misleads by 3× | speculative gain is workload-dependent. [`docs/CHOOSING-A-DRAFTER.md`](docs/CHOOSING-A-DRAFTER.md) |
 | **giving the model the whole box** | no faster, sometimes slower | a KV pool larger than `--max-running-requests` can use is wasted. [`docs/CO-RESIDENCY.md`](docs/CO-RESIDENCY.md) |
+| **chasing a log warning** | days spent, throughput unchanged or worse | `draft greedy head kept eager` was real, fixable, and cost nothing. [`docs/DRAFTER-AB.md`](docs/DRAFTER-AB.md) |
 
 ---
 
