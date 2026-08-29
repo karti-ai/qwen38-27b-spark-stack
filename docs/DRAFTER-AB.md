@@ -70,13 +70,39 @@ solely a head swap. The regression cannot be attributed to the head alone.
   The expensive knowledge is which plausible optimisations do nothing — see also
   the CPU-pinning and page-cache results in our sibling repo, both refuted.
 
-## Choosing, if you have to choose today
+## Choosing: measure your generation length, not your concurrency
 
-Measure your own turn-length distribution first —
-[`track-concurrency.py`](../scripts/track-concurrency.py) reads served
-concurrency out of SGLang's logs, and the same logs carry generation lengths.
+We nearly got this wrong. Having measured that **95% of requests arrive to an
+idle server**, we reasoned "concurrency is 1, so optimise for c=1" and picked the
+drafter that won our short probe. But *both* probes above are c=1 measurements —
+concurrency was never the deciding variable. **Output length was.**
 
-On our box, live traffic averaged **24.36 tok/s** on DSpark v2 — between our two
-synthetic probes, which is the clearest evidence that neither probe alone
-describes a real workload. We stayed on DSpark v2 because our traffic is
-overwhelmingly short turns; a long-generation workload should pick DFlash2.
+The measurement that settled it, from the serving log of live traffic:
+
+| | |
+|---|---|
+| decode lines per request | ~2.05 (258 lines / 126 requests) |
+| implied decode steps per request | ~82 |
+| x acceptance 3.1 → mean output | **~250 tokens** |
+
+Every request emitted at least two decode lines, so essentially nothing finished
+in under 80 steps: there was no short-turn population at all. Our traffic is the
+*long* profile almost exactly — and on that profile DFlash2 is 2.1x faster. We
+switched.
+
+**We had assumed "agent traffic = short turns" and never checked.** The
+assumption survived several rounds of careful benchmarking because it was never
+stated as a claim, only used as one.
+
+To measure your own: SGLang emits a decode line every `--decode-log-interval`
+steps (default 40). Count those against your request count, multiply by the
+interval and by your acceptance length, and you have mean output tokens. A
+request that emits zero decode lines finished in under one interval — if most of
+yours do, you genuinely are a short-turn workload and the ordering above
+reverses.
+
+One more number worth reconciling: live decode throughput averaged **24.36 tok/s**
+while our synthetic c=1 probes read 8.32 and 14.61. Those are different metrics —
+the live figure is decode-only, ours are whole-request including prefill and
+first-token latency. Do not compare them directly, and be careful reading anyone
+else's headline tok/s without knowing which one they quote.
