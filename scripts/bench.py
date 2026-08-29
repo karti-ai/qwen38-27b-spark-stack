@@ -51,12 +51,44 @@ import time
 import urllib.error
 import urllib.request
 
-PROMPT = (
-    "Write a clear, self-contained explanation of how a mixture-of-experts "
-    "transformer routes tokens to experts, why only a fraction of parameters "
-    "are active per token, and what that means for memory versus compute. "
-    "Be concrete and complete."
-)
+# TWO WORKLOAD PROFILES, BECAUSE ONE NUMBER LIES.
+#
+# Speculative gain is workload-dependent and the spread between drafters is
+# enormous: published probes for one model class put drafter A at 51.5 tok/s on
+# code and 18.3 on long essays, while drafter B hits 66.6 on short chat and 25.4
+# on essays. Benchmarking a single prompt shape therefore tells you almost
+# nothing about a different one — we measured only the long profile, got 18.99,
+# and called the model slow when that was simply its worst regime.
+#
+# "long"  — one sustained generation. Stresses sustained decode.
+# "short" — a burst of terse question/answer turns, which is what agent and chat
+#           traffic actually looks like. Draft acceptance is usually much higher
+#           here, and this is the profile most real deployments live in.
+PROFILES = {
+    "long": {
+        "max_tokens": 256,
+        "prompts": [
+            "Write a clear, self-contained explanation of how a mixture-of-experts "
+            "transformer routes tokens to experts, why only a fraction of parameters "
+            "are active per token, and what that means for memory versus compute. "
+            "Be concrete and complete."
+        ],
+    },
+    "short": {
+        "max_tokens": 48,
+        "prompts": [
+            "What is the capital of France? One word.",
+            "Convert 45 degrees Celsius to Fahrenheit. Number only.",
+            "Name the Python function that returns a sorted copy of a list.",
+            "Is 91 a prime number? Yes or no, then the factors if not.",
+            "In one sentence, what does a load balancer do?",
+            "Give the git command to discard unstaged changes in one file.",
+            "What HTTP status code means Too Many Requests?",
+            "One line: what is the difference between a mutex and a semaphore?",
+        ],
+    },
+}
+PROMPT = PROFILES["long"]["prompts"][0]
 
 
 def http_json(url: str, body: dict | None = None, timeout: int = 600):
@@ -107,11 +139,12 @@ class Result:
 
 
 def one_stream(
-    base_url: str, model: str, max_tokens: int, out: Result, think: bool = False
+    base_url: str, model: str, max_tokens: int, out: Result, think: bool = False,
+    prompt: str = PROMPT
 ) -> None:
     body = {
         "model": model,
-        "messages": [{"role": "user", "content": PROMPT}],
+        "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": 0.0,
         "stream": True,
@@ -171,14 +204,19 @@ def one_stream(
     out.tokens = usage_tokens if usage_tokens is not None else n
 
 
-def sweep(base_url: str, model: str, level: int, max_tokens: int, think: bool = False) -> dict:
+def sweep(base_url: str, model: str, level: int, max_tokens: int, think: bool = False,
+          prompts: list[str] | None = None) -> dict:
+    prompts = prompts or [PROMPT]
     before = metrics_text(base_url)
     q0 = counter(before, "vllm:request_queue_time_seconds_sum", "sglang:queue_time_seconds_sum")
 
     results = [Result() for _ in range(level)]
     threads = [
-        threading.Thread(target=one_stream, args=(base_url, model, max_tokens, r, think))
-        for r in results
+        threading.Thread(
+            target=one_stream,
+            args=(base_url, model, max_tokens, r, think, prompts[i % len(prompts)]),
+        )
+        for i, r in enumerate(results)
     ]
     t0 = time.perf_counter()
     for t in threads:
@@ -221,20 +259,29 @@ def main() -> int:
     ap.add_argument("--base-url", default="http://localhost:8001/v1")
     ap.add_argument("--model", default="qwen3.8-27b")
     ap.add_argument("--concurrency", default="1,8,16,32,48")
-    ap.add_argument("--max-tokens", type=int, default=256)
+    ap.add_argument("--profile", choices=sorted(PROFILES), default="long",
+                    help="workload shape: 'long' one sustained generation, "
+                         "'short' terse agent-style turns (default: long)")
+    ap.add_argument("--max-tokens", type=int, default=None,
+                    help="override the profile's token budget")
     ap.add_argument("--thinking", action="store_true",
                     help="leave the reasoning block enabled (default: disabled)")
     ap.add_argument("--out", help="write JSON results here")
     args = ap.parse_args()
 
     levels = [int(x) for x in args.concurrency.split(",") if x.strip()]
+    prof = PROFILES[args.profile]
+    max_tokens = args.max_tokens or prof["max_tokens"]
+    prompts = prof["prompts"]
 
     try:
         served = http_json(args.base_url.rstrip("/") + "/models")
         ids = [m["id"] for m in served.get("data", [])]
     except Exception as exc:  # noqa: BLE001
         sys.exit(f"!! cannot reach {args.base_url}: {exc}")
-    print(f"serving: {', '.join(ids)}\n")
+    print(f"serving: {', '.join(ids)}")
+    print(f"profile: {args.profile}  (max_tokens {max_tokens}, "
+          f"{len(prompts)} prompt(s))\n")
 
     header = (
         f"{'c':>4}  {'agg tok/s':>10}  {'per-stream':>10}  "
@@ -244,7 +291,7 @@ def main() -> int:
     print("-" * 64)
     rows = []
     for level in levels:
-        row = sweep(args.base_url, args.model, level, args.max_tokens, args.thinking)
+        row = sweep(args.base_url, args.model, level, max_tokens, args.thinking, prompts)
         rows.append(row)
         q = row["queue_time_delta_s"]
         qs = "n/a" if q is None else f"{q:.2f}"
@@ -276,7 +323,8 @@ def main() -> int:
         with open(args.out, "w") as fh:
             json.dump(
                 {"base_url": args.base_url, "model": args.model,
-                 "max_tokens": args.max_tokens, "results": rows},
+                 "profile": args.profile, "max_tokens": max_tokens,
+                 "results": rows},
                 fh, indent=2,
             )
         print(f"\nwrote {args.out}")
